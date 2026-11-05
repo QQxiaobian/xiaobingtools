@@ -1,0 +1,26 @@
+# 本地工具链（Flutter SDK、JDK、Android SDK 等，体积大，不入库）
+.tools/
+
+# 打包产物与历史安装包
+releases/
+*.apk
+*.aab
+
+# 第三方原始 APK（仅本地分析用，勿公开）
+输电工具箱_5.1.0.apk
+
+# 构建缓存
+**/.cxx/
+**/.gradle/
+**/.kotlin/
+**/build/
+
+# 编辑器配置
+.idea/
+.trae/
+.vscode/
+
+# 本地签名与口令（严禁入库）
+**/key.properties
+**/*.jks
+**/*.keystore
