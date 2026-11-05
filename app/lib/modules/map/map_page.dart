@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../core/config.dart';
@@ -33,10 +36,17 @@ class _MapPageState extends State<MapPage> {
     Color(0xFFC62828),
   ];
 
+  /// 低于该缩放级别只画小圆点（轻量），达到后才绘制文字标注。
+  static const double _labelZoom = 14;
+
+  /// 视口外扩比例，避免标注在边缘突然弹出。
+  static const double _boundsPadding = 0.25;
+
   final MapController _mapController = MapController();
   List<Line> _lines = [];
   List<Tower> _towers = [];
   Map<int, Line> _lineById = {};
+  Map<int, Color> _colorByLineId = {};
   bool _loading = true;
   bool _measureMode = false;
   List<LatLng> _measurePoints = [];
@@ -44,46 +54,202 @@ class _MapPageState extends State<MapPage> {
   int _tileErrors = 0;
   bool _tileErrorNotified = false;
 
+  // 渲染缓存：只有数据、缩放级别或视口变化时才重建，拖动时不再重复计算。
+  List<Tower> _locatedTowers = [];
+  List<Polyline> _linePolylines = [];
+  List<Marker> _towerMarkers = [];
+  double _zoom = 4.5;
+  LatLngBounds? _visibleBounds;
+  bool _mapReady = false;
+
+  // 实时定位。
+  StreamSubscription<Position>? _positionSub;
+  Position? _position;
+  bool _followLocation = false;
+  bool _locationBusy = false;
+
   @override
   void initState() {
     super.initState();
     _load();
   }
 
-  Future<void> _load() async {
-    if (widget.line != null) {
-      final towers = await Repo.towers(widget.line!.id);
-      if (!mounted) return;
-      setState(() {
-        _lines = [widget.line!];
-        _towers = towers;
-        _loading = false;
-      });
-    } else {
-      final lines = await Repo.lines();
-      final towers = await Repo.towers();
-      if (!mounted) return;
-      setState(() {
-        _lines = lines;
-        _towers = towers;
-        _loading = false;
-      });
-    }
-    _lineById = {
-      for (final line in _lines)
-        if (line.id != null) line.id!: line,
-    };
+  @override
+  void dispose() {
+    _positionSub?.cancel();
+    _mapController.dispose();
+    super.dispose();
   }
 
-  List<Tower> get _located => _towers.where((t) => t.hasCoordinate).toList();
+  Future<void> _load() async {
+    List<Line> lines;
+    List<Tower> towers;
+    if (widget.line != null) {
+      lines = [widget.line!];
+      towers = await Repo.towers(widget.line!.id);
+    } else {
+      lines = await Repo.lines();
+      towers = await Repo.towers();
+    }
+    if (!mounted) return;
+    setState(() {
+      _lines = lines;
+      _towers = towers;
+      _loading = false;
+      _lineById = {
+        for (final line in lines)
+          if (line.id != null) line.id!: line,
+      };
+      _colorByLineId = {
+        for (var i = 0; i < lines.length; i++)
+          if (lines[i].id != null)
+            lines[i].id!: _lineColors[i % _lineColors.length],
+      };
+      _rebuildRenderCache();
+    });
+  }
+
+  /// 数据变化后重建折线与标注缓存（进入页面 / 编辑返回时各一次）。
+  void _rebuildRenderCache() {
+    _locatedTowers = _towers.where((t) => t.hasCoordinate).toList();
+
+    final polylines = <Polyline>[];
+    final towersByLine = <int, List<LatLng>>{};
+    for (final tower in _locatedTowers) {
+      towersByLine
+          .putIfAbsent(tower.lineId, () => [])
+          .add(LatLng(tower.lat, tower.lng));
+    }
+    for (final line in _lines) {
+      final points = towersByLine[line.id];
+      if (points == null || points.length < 2) continue;
+      polylines.add(
+        Polyline(
+          points: points,
+          strokeWidth: 3.5,
+          color: _colorByLineId[line.id] ?? _lineColors.first,
+        ),
+      );
+    }
+    _linePolylines = polylines;
+
+    if (!_mapReady) {
+      _zoom = _initialZoom;
+      _visibleBounds = null;
+    }
+    _rebuildMarkers();
+  }
+
+  /// 按当前缩放级别重建杆塔标注：
+  /// 小比例尺画圆点（几百基也不卡），大比例尺只对视口内的杆塔画文字标注。
+  void _rebuildMarkers() {
+    final towers = _locatedTowers;
+    if (towers.isEmpty) {
+      _towerMarkers = [];
+      return;
+    }
+
+    if (_zoom < _labelZoom) {
+      _towerMarkers = [
+        for (final tower in towers)
+          Marker(
+            point: LatLng(tower.lat, tower.lng),
+            width: 18,
+            height: 18,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => _showTowerSheet(tower),
+              child: Center(
+                child: Container(
+                  width: 11,
+                  height: 11,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: _colorByLineId[tower.lineId] ?? _lineColors.first,
+                    border: Border.all(color: Colors.white, width: 1.6),
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ];
+      return;
+    }
+
+    final bounds = _visibleBounds;
+    final visible = bounds == null
+        ? towers
+        : towers
+            .where(
+              (tower) => _padded(bounds).contains(LatLng(tower.lat, tower.lng)),
+            )
+            .toList();
+    _towerMarkers = [
+      for (final tower in visible)
+        Marker(
+          point: LatLng(tower.lat, tower.lng),
+          width: 150,
+          height: 16,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _showTowerSheet(tower),
+            child: Center(
+              child: Text(
+                _towerLabel(tower),
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.visible,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  height: 1.1,
+                  fontWeight: FontWeight.w600,
+                  shadows: [
+                    Shadow(blurRadius: 4, color: Colors.black87),
+                    Shadow(blurRadius: 2, color: Colors.black),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+    ];
+  }
+
+  static LatLngBounds _padded(LatLngBounds bounds) {
+    final dLat = (bounds.north - bounds.south) * _boundsPadding;
+    final dLng = (bounds.east - bounds.west) * _boundsPadding;
+    return LatLngBounds(
+      LatLng(bounds.south - dLat, bounds.west - dLng),
+      LatLng(bounds.north + dLat, bounds.east + dLng),
+    );
+  }
+
+  /// 地图视野变化：跨过标注阈值或在标注模式下平移时才重建标注。
+  void _onPositionChanged(MapCamera camera, bool hasGesture) {
+    var changed = false;
+    if (hasGesture && _followLocation) {
+      _followLocation = false;
+      changed = true;
+    }
+    final wasLabelMode = _zoom >= _labelZoom;
+    final isLabelMode = camera.zoom >= _labelZoom;
+    _zoom = camera.zoom;
+    _visibleBounds = camera.visibleBounds;
+    if (wasLabelMode != isLabelMode || isLabelMode) {
+      _rebuildMarkers();
+      changed = true;
+    }
+    if (changed && mounted) setState(() {});
+  }
 
   LatLng get _initialCenter {
-    final located = _located;
+    final located = _locatedTowers;
     if (located.isEmpty) return const LatLng(30.5, 110.0);
     return LatLng(located.first.lat, located.first.lng);
   }
 
-  double get _initialZoom => _located.isEmpty ? 4.5 : 13;
+  double get _initialZoom => _locatedTowers.isEmpty ? 4.5 : 13;
 
   double get _measureLength {
     var total = 0.0;
@@ -115,7 +281,7 @@ class _MapPageState extends State<MapPage> {
   }
 
   void _fitTowers() {
-    final located = _located;
+    final located = _locatedTowers;
     if (located.length < 2) return;
     final points = located.map((t) => LatLng(t.lat, t.lng)).toList();
     _mapController.fitCamera(
@@ -126,6 +292,98 @@ class _MapPageState extends State<MapPage> {
       ),
     );
   }
+
+  // ---------- 实时定位 ----------
+
+  Future<void> _onLocationButton() async {
+    if (_positionSub == null) {
+      await _enableLocation();
+      return;
+    }
+    final position = _position;
+    if (position != null && _mapReady) {
+      setState(() => _followLocation = true);
+      _mapController.move(
+        LatLng(position.latitude, position.longitude),
+        _zoom < 15 ? 16 : _zoom,
+      );
+    }
+  }
+
+  Future<void> _enableLocation() async {
+    if (_locationBusy) return;
+    setState(() => _locationBusy = true);
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        _toast('定位服务未开启，请在系统设置中打开 GPS');
+        return;
+      }
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied) {
+        _toast('未授予定位权限');
+        return;
+      }
+      if (permission == LocationPermission.deniedForever) {
+        _toast('定位权限被拒绝，请在系统设置中为本应用开启定位');
+        await Geolocator.openAppSettings();
+        return;
+      }
+
+      // 先取一次当前位置快速上图，不等流式更新。
+      try {
+        final quick = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 8),
+          ),
+        );
+        _onPosition(quick, center: true);
+      } catch (_) {
+        // 超时无所谓，等位置流推送。
+      }
+
+      _positionSub?.cancel();
+      _positionSub = Geolocator.getPositionStream(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 3,
+        ),
+      ).listen(
+        _onPosition,
+        onError: (Object error) => _toast('定位更新失败：$error'),
+      );
+      if (mounted) setState(() => _followLocation = true);
+      _toast('已开启实时定位，长按定位按钮可关闭');
+    } finally {
+      if (mounted) setState(() => _locationBusy = false);
+    }
+  }
+
+  void _onPosition(Position position, {bool center = false}) {
+    if (!mounted) return;
+    setState(() => _position = position);
+    if ((center || _followLocation) && _mapReady) {
+      _mapController.move(
+        LatLng(position.latitude, position.longitude),
+        _zoom < 15 ? 16 : _zoom,
+      );
+    }
+  }
+
+  void _stopLocation() {
+    _positionSub?.cancel();
+    _positionSub = null;
+    setState(() {
+      _position = null;
+      _followLocation = false;
+    });
+    _toast('已关闭实时定位');
+  }
+
+  // ---------- 其余交互 ----------
 
   Future<void> _search() async {
     final controller = TextEditingController();
@@ -158,7 +416,7 @@ class _MapPageState extends State<MapPage> {
     if (query == null || query.trim().isEmpty) return;
     final keyword = query.trim().toLowerCase();
     Tower? found;
-    for (final tower in _located) {
+    for (final tower in _locatedTowers) {
       final label = _towerLabel(tower).toLowerCase();
       if (label.contains(keyword)) {
         found = tower;
@@ -291,26 +549,6 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  List<Polyline> _buildPolylines() {
-    final polylines = <Polyline>[];
-    for (var i = 0; i < _lines.length; i++) {
-      final line = _lines[i];
-      final points = _towers
-          .where((tower) => tower.lineId == line.id && tower.hasCoordinate)
-          .map((tower) => LatLng(tower.lat, tower.lng))
-          .toList();
-      if (points.length < 2) continue;
-      polylines.add(
-        Polyline(
-          points: points,
-          strokeWidth: 3.5,
-          color: _lineColors[i % _lineColors.length],
-        ),
-      );
-    }
-    return polylines;
-  }
-
   Future<void> _openPage(String route) async {
     Widget page;
     switch (route) {
@@ -397,15 +635,56 @@ class _MapPageState extends State<MapPage> {
         ),
         PopupMenuItem(
           value: 'quiz',
-          child: _MenuItem(icon: Icons.quiz_outlined, text: '刷题（开发中）'),
+          child: _MenuItem(icon: Icons.quiz_outlined, text: '刷题练习'),
         ),
       ],
     );
   }
 
+  /// 定位蓝点与精度圈图层。
+  List<Widget> _buildLocationLayers() {
+    final position = _position;
+    if (position == null) return const [];
+    final point = LatLng(position.latitude, position.longitude);
+    return [
+      if (position.accuracy > 0)
+        CircleLayer(
+          circles: [
+            CircleMarker(
+              point: point,
+              radius: position.accuracy,
+              useRadiusInMeter: true,
+              color: const Color(0xFF1E88E5).withValues(alpha: 0.12),
+              borderColor: const Color(0xFF1E88E5).withValues(alpha: 0.4),
+              borderStrokeWidth: 1,
+            ),
+          ],
+        ),
+      MarkerLayer(
+        markers: [
+          Marker(
+            point: point,
+            width: 24,
+            height: 24,
+            child: Container(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF1E88E5),
+                border: Border.all(color: Colors.white, width: 3),
+                boxShadow: const [
+                  BoxShadow(blurRadius: 6, color: Colors.black38),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
-    final located = _located;
+    final located = _locatedTowers;
     final source = AppConfig.mapSources[_sourceIndex];
 
     return Scaffold(
@@ -431,6 +710,27 @@ class _MapPageState extends State<MapPage> {
           if (widget.line == null) _buildMainMenu(),
         ],
       ),
+      floatingActionButton: _loading
+          ? null
+          : GestureDetector(
+              onLongPress: _positionSub != null ? _stopLocation : null,
+              child: FloatingActionButton(
+                onPressed: _locationBusy ? null : _onLocationButton,
+                child: _locationBusy
+                    ? const SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2.4),
+                      )
+                    : Icon(
+                        _positionSub == null
+                            ? Icons.my_location
+                            : _followLocation
+                                ? Icons.gps_fixed
+                                : Icons.gps_not_fixed,
+                      ),
+              ),
+            ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : Stack(
@@ -441,7 +741,14 @@ class _MapPageState extends State<MapPage> {
                   options: MapOptions(
                     initialCenter: _initialCenter,
                     initialZoom: _initialZoom,
-                    onMapReady: _fitTowers,
+                    onMapReady: () {
+                      _mapReady = true;
+                      _zoom = _mapController.camera.zoom;
+                      _visibleBounds = _mapController.camera.visibleBounds;
+                      _fitTowers();
+                      setState(_rebuildMarkers);
+                    },
+                    onPositionChanged: _onPositionChanged,
                     onLongPress: (tapPosition, point) {
                       if (!_measureMode) return;
                       setState(() => _measurePoints.add(point));
@@ -449,41 +756,11 @@ class _MapPageState extends State<MapPage> {
                   ),
                   children: [
                     ..._buildTileLayers(),
-                    if (_towers.isNotEmpty)
-                      PolylineLayer(polylines: _buildPolylines()),
-                    if (located.isNotEmpty)
-                      MarkerLayer(
-                        markers: [
-                          for (final tower in located)
-                            Marker(
-                              point: LatLng(tower.lat, tower.lng),
-                              width: 150,
-                              height: 16,
-                              child: GestureDetector(
-                                behavior: HitTestBehavior.opaque,
-                                onTap: () => _showTowerSheet(tower),
-                                child: Center(
-                                  child: Text(
-                                    _towerLabel(tower),
-                                    maxLines: 1,
-                                    softWrap: false,
-                                    overflow: TextOverflow.visible,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 11,
-                                      height: 1.1,
-                                      fontWeight: FontWeight.w600,
-                                      shadows: [
-                                        Shadow(blurRadius: 4, color: Colors.black87),
-                                        Shadow(blurRadius: 2, color: Colors.black),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
+                    if (_linePolylines.isNotEmpty)
+                      PolylineLayer(polylines: _linePolylines),
+                    if (_towerMarkers.isNotEmpty)
+                      MarkerLayer(markers: _towerMarkers),
+                    ..._buildLocationLayers(),
                     if (_measurePoints.length > 1)
                       PolylineLayer(
                         polylines: [
@@ -536,6 +813,28 @@ class _MapPageState extends State<MapPage> {
                           _lines.isEmpty
                               ? '暂无线路数据。点右上角菜单 →「线路台账」导入 Excel 或 KML。'
                               : '线路暂无有效杆塔坐标，请先在台帐中补充经纬度。',
+                        ),
+                      ),
+                    ),
+                  ),
+                if (_zoom < _labelZoom && located.isNotEmpty)
+                  Positioned(
+                    top: 16,
+                    left: 16,
+                    right: 16,
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: const Text(
+                          '放大地图查看杆塔名称',
+                          style: TextStyle(color: Colors.white, fontSize: 12),
                         ),
                       ),
                     ),

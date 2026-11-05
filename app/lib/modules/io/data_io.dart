@@ -50,7 +50,7 @@ class DataIo {
     '备注',
   ];
 
-  static Future<Directory> _exportsDir() async {
+  static Future<Directory> exportsDir() async {
     final docs = await getApplicationDocumentsDirectory();
     final dir = Directory(p.join(docs.path, 'exports'));
     if (!dir.existsSync()) {
@@ -106,7 +106,7 @@ class DataIo {
     }
 
     final file =
-        File(p.join((await _exportsDir()).path, '台账_${_stamp()}.xlsx'));
+        File(p.join((await exportsDir()).path, '台账_${_stamp()}.xlsx'));
     await _saveExcel(excel, file);
     return file;
   }
@@ -140,7 +140,7 @@ class DataIo {
       TextCellValue(''),
     ]);
 
-    final file = File(p.join((await _exportsDir()).path, '台账模板.xlsx'));
+    final file = File(p.join((await exportsDir()).path, '台账模板.xlsx'));
     await _saveExcel(excel, file);
     return file;
   }
@@ -391,7 +391,7 @@ class DataIo {
       ]);
     }
     final file =
-        File(p.join((await _exportsDir()).path, '缺陷记录_${_stamp()}.xlsx'));
+        File(p.join((await exportsDir()).path, '缺陷记录_${_stamp()}.xlsx'));
     await _saveExcel(excel, file);
     return file;
   }
@@ -431,7 +431,7 @@ class DataIo {
       ..writeln('</kml>');
     final file = File(
       p.join(
-        (await _exportsDir()).path,
+        (await exportsDir()).path,
         '${_safeName(line.name)}_${_stamp()}.kml',
       ),
     );

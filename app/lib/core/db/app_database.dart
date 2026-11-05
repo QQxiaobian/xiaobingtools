@@ -21,7 +21,7 @@ class AppDatabase {
     final path = p.join(dir, 'xianlu_toolbox.db');
     return openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE lines (
@@ -63,7 +63,53 @@ class AppDatabase {
           )
         ''');
         await db.execute('CREATE INDEX idx_flaws_line ON flaws(line_id)');
+        await _createQuizTables(db);
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await _createQuizTables(db);
+        }
       },
     );
+  }
+
+  /// 刷题模块：题库、题目、答题统计三张表。
+  static Future<void> _createQuizTables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS quiz_banks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        remark TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT ''
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS quiz_questions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        bank_id INTEGER NOT NULL,
+        type TEXT NOT NULL DEFAULT '单选',
+        chapter TEXT NOT NULL DEFAULT '',
+        stem TEXT NOT NULL,
+        options TEXT NOT NULL DEFAULT '',
+        answer TEXT NOT NULL DEFAULT '',
+        analysis TEXT NOT NULL DEFAULT '',
+        seq INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_quiz_questions_bank '
+      'ON quiz_questions(bank_id)',
+    );
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS quiz_stats (
+        question_id INTEGER PRIMARY KEY,
+        bank_id INTEGER NOT NULL DEFAULT 0,
+        correct_count INTEGER NOT NULL DEFAULT 0,
+        wrong_count INTEGER NOT NULL DEFAULT 0,
+        streak INTEGER NOT NULL DEFAULT 0,
+        last_wrong_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT ''
+      )
+    ''');
   }
 }
