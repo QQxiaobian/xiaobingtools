@@ -1,5 +1,28 @@
+# 操作系统
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 编辑器 / IDE
+.vscode/
+.idea/
+.trae/
+*.iml
+*.swp
+*.swo
+
+# 环境变量与密钥（绝不入库）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+**/key.properties
+
 # 本地工具链（Flutter SDK、JDK、Android SDK 等，体积大，不入库）
 .tools/
+.workbuddy/
 
 # 打包产物与历史安装包
 releases/
@@ -9,18 +32,42 @@ releases/
 # 第三方原始 APK（仅本地分析用，勿公开）
 输电工具箱_5.1.0.apk
 
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
 # 构建缓存
 **/.cxx/
 **/.gradle/
 **/.kotlin/
 **/build/
+.gradle/
+local.properties
+captures/
+gradle-wrapper.jar
 
-# 编辑器配置
-.idea/
-.trae/
-.vscode/
+# 签名文件（严禁入库）
+*.keystore
+*.jks
 
-# 本地签名与口令（严禁入库）
-**/key.properties
-**/*.jks
-**/*.keystore
+# Node
+node_modules/
+dist/
+build/
+.vite/
+.cache/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
