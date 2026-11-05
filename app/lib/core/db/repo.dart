@@ -1,3 +1,5 @@
+import 'package:sqflite/sqflite.dart';
+
 import '../db/app_database.dart';
 import '../models/flaw.dart';
 import '../models/line.dart';
