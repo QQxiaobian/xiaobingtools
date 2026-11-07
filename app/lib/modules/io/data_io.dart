@@ -19,9 +19,11 @@ class ImportResult {
   int towersAdded = 0;
   int towersUpdated = 0;
   int skipped = 0;
+  int filesImported = 0;
   final List<String> warnings = [];
 
   String get summary =>
+      '${filesImported > 1 ? '共处理 $filesImported 个文件，' : ''}'
       '新增线路 $linesAdded 条，更新线路 $linesUpdated 条，'
       '新增杆塔 $towersAdded 基，更新杆塔 $towersUpdated 基，跳过 $skipped 条';
 }

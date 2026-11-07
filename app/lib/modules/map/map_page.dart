@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -67,6 +68,10 @@ class _MapPageState extends State<MapPage> {
   Position? _position;
   bool _followLocation = false;
   bool _locationBusy = false;
+
+  /// 行进方向（0° = 正北），有方向时才绘制箭头。
+  double _bearing = 0;
+  bool _hasBearing = false;
 
   @override
   void initState() {
@@ -364,7 +369,14 @@ class _MapPageState extends State<MapPage> {
 
   void _onPosition(Position position, {bool center = false}) {
     if (!mounted) return;
-    setState(() => _position = position);
+    final bearing = _resolveBearing(position);
+    setState(() {
+      _position = position;
+      if (bearing >= 0) {
+        _bearing = bearing;
+        _hasBearing = true;
+      }
+    });
     if ((center || _followLocation) && _mapReady) {
       _mapController.move(
         LatLng(position.latitude, position.longitude),
@@ -373,12 +385,61 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
+  /// 计算行进方向：优先用相邻两点计算，静止时退回 GPS 罗盘值。
+  /// 返回 -1 表示本次无法判断方向。
+  double _resolveBearing(Position position) {
+    final previous = _position;
+    if (previous != null) {
+      final moved = distanceMeters(
+        previous.latitude,
+        previous.longitude,
+        position.latitude,
+        position.longitude,
+      );
+      if (moved >= 2) {
+        return _bearingBetween(
+          previous.latitude,
+          previous.longitude,
+          position.latitude,
+          position.longitude,
+        );
+      }
+    }
+    if (position.heading >= 0 && position.speed > 0.5) {
+      return position.heading % 360;
+    }
+    return -1;
+  }
+
+  static double _bearingBetween(
+    double lat1,
+    double lng1,
+    double lat2,
+    double lng2,
+  ) {
+    final phi1 = lat1 * math.pi / 180;
+    final phi2 = lat2 * math.pi / 180;
+    final deltaLng = (lng2 - lng1) * math.pi / 180;
+    final y = math.sin(deltaLng) * math.cos(phi2);
+    final x = math.cos(phi1) * math.sin(phi2) -
+        math.sin(phi1) * math.cos(phi2) * math.cos(deltaLng);
+    final degrees = math.atan2(y, x) * 180 / math.pi;
+    return (degrees + 360) % 360;
+  }
+
+  /// 方位角转八方位中文，如 45° → 东北。
+  static String _headingLabel(double bearing) {
+    const labels = ['北', '东北', '东', '东南', '南', '西南', '西', '西北'];
+    return labels[((bearing + 22.5) ~/ 45) % 8];
+  }
+
   void _stopLocation() {
     _positionSub?.cancel();
     _positionSub = null;
     setState(() {
       _position = null;
       _followLocation = false;
+      _hasBearing = false;
     });
     _toast('已关闭实时定位');
   }
@@ -641,11 +702,12 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
-  /// 定位蓝点与精度圈图层。
+  /// 定位蓝点、方向箭头与精度圈图层。
   List<Widget> _buildLocationLayers() {
     final position = _position;
     if (position == null) return const [];
     final point = LatLng(position.latitude, position.longitude);
+    const blue = Color(0xFF1E88E5);
     return [
       if (position.accuracy > 0)
         CircleLayer(
@@ -654,8 +716,8 @@ class _MapPageState extends State<MapPage> {
               point: point,
               radius: position.accuracy,
               useRadiusInMeter: true,
-              color: const Color(0xFF1E88E5).withValues(alpha: 0.12),
-              borderColor: const Color(0xFF1E88E5).withValues(alpha: 0.4),
+              color: blue.withValues(alpha: 0.12),
+              borderColor: blue.withValues(alpha: 0.4),
               borderStrokeWidth: 1,
             ),
           ],
@@ -664,17 +726,40 @@ class _MapPageState extends State<MapPage> {
         markers: [
           Marker(
             point: point,
-            width: 24,
-            height: 24,
-            child: Container(
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFF1E88E5),
-                border: Border.all(color: Colors.white, width: 3),
-                boxShadow: const [
-                  BoxShadow(blurRadius: 6, color: Colors.black38),
-                ],
-              ),
+            width: 64,
+            height: 64,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                if (_hasBearing)
+                  Transform.rotate(
+                    angle: _bearing * math.pi / 180,
+                    child: Transform.translate(
+                      offset: const Offset(0, -16),
+                      child: const Icon(
+                        Icons.navigation,
+                        size: 20,
+                        color: blue,
+                        shadows: [
+                          Shadow(blurRadius: 4, color: Colors.white),
+                          Shadow(blurRadius: 6, color: Colors.black26),
+                        ],
+                      ),
+                    ),
+                  ),
+                Container(
+                  width: 18,
+                  height: 18,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: blue,
+                    border: Border.all(color: Colors.white, width: 3),
+                    boxShadow: const [
+                      BoxShadow(blurRadius: 6, color: Colors.black38),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -835,6 +920,53 @@ class _MapPageState extends State<MapPage> {
                         child: const Text(
                           '放大地图查看杆塔名称',
                           style: TextStyle(color: Colors.white, fontSize: 12),
+                        ),
+                      ),
+                    ),
+                  ),
+                if (_position != null && !_measureMode)
+                  Positioned(
+                    left: 12,
+                    bottom: 12,
+                    child: SafeArea(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.62),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'E ${formatLngLat(_position!.longitude)}  '
+                              'N ${formatLngLat(_position!.latitude)}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              [
+                                if (_hasBearing)
+                                  '方位 ${_bearing.round()}° '
+                                      '${_headingLabel(_bearing)}',
+                                if (_position!.speed > 0.3)
+                                  '速度 '
+                                      '${(_position!.speed * 3.6).toStringAsFixed(1)} km/h',
+                                '精度 ±${_position!.accuracy.toStringAsFixed(0)} m',
+                              ].join(' · '),
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),

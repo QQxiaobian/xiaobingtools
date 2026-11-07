@@ -226,14 +226,30 @@ class Repo {
     return rows.map((row) => row['chapter'] as String).toList();
   }
 
-  /// 跨题库按关键词搜题（题干 / 解析 / 选项）。
+  /// 跨题库按关键词搜题（题干 / 选项 / 答案 / 解析）。
   static Future<List<Question>> searchQuestions(String keyword) async {
     final db = await AppDatabase.instance.database;
     final like = '%$keyword%';
+    final trimmed = keyword.trim();
+    // 判断题答案在库中存为 A/B，允许用“正确/错误”直接命中。
+    final judgeLetter = switch (trimmed) {
+      '正确' || '对' || '√' => 'A',
+      '错误' || '错' || '×' || 'x' || 'X' => 'B',
+      _ => null,
+    };
     final rows = await db.query(
       'quiz_questions',
-      where: 'stem LIKE ? OR analysis LIKE ? OR options LIKE ?',
-      whereArgs: [like, like, like],
+      where: judgeLetter == null
+          ? 'stem LIKE ? OR options LIKE ? OR answer LIKE ? OR analysis LIKE ?'
+          : 'stem LIKE ? OR options LIKE ? OR answer LIKE ? '
+              "OR analysis LIKE ? OR answer = ?",
+      whereArgs: [
+        like,
+        like,
+        like,
+        like,
+        if (judgeLetter != null) judgeLetter,
+      ],
       orderBy: 'bank_id ASC, seq ASC',
       limit: 200,
     );

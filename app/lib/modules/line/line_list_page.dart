@@ -108,7 +108,7 @@ class _LineListPageState extends State<LineListPage> {
       await showDialog<void>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('KML 导入完成'),
+          title: const Text('KML 批量导入完成'),
           content: SingleChildScrollView(
             child: Text(
               result.warnings.isEmpty
@@ -199,7 +199,7 @@ class _LineListPageState extends State<LineListPage> {
               }
             },
             itemBuilder: (_) => const [
-              PopupMenuItem(value: 'kml', child: Text('导入 KML 文件')),
+              PopupMenuItem(value: 'kml', child: Text('批量导入 KML 文件（可多选）')),
               PopupMenuItem(value: 'template', child: Text('下载导入模板')),
             ],
           ),
@@ -213,7 +213,7 @@ class _LineListPageState extends State<LineListPage> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _lines.isEmpty
-              ? _EmptyHint(onImport: _import)
+              ? _EmptyHint(onImport: _import, onImportKml: _importKml)
               : RefreshIndicator(
                   onRefresh: _reload,
                   child: ListView.builder(
@@ -313,9 +313,10 @@ class _LineCard extends StatelessWidget {
 }
 
 class _EmptyHint extends StatelessWidget {
-  const _EmptyHint({required this.onImport});
+  const _EmptyHint({required this.onImport, required this.onImportKml});
 
   final VoidCallback onImport;
+  final VoidCallback onImportKml;
 
   @override
   Widget build(BuildContext context) {
@@ -330,7 +331,7 @@ class _EmptyHint extends StatelessWidget {
             const Text('还没有线路数据'),
             const SizedBox(height: 4),
             const Text(
-              '点击右下角新建线路，或用右上角导入已有 Excel 台账',
+              '点击右下角新建线路，或导入已有 Excel 台账 / KML 文件',
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 16),
@@ -338,6 +339,12 @@ class _EmptyHint extends StatelessWidget {
               onPressed: onImport,
               icon: const Icon(Icons.upload_file),
               label: const Text('导入 Excel 台账'),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: onImportKml,
+              icon: const Icon(Icons.map_outlined),
+              label: const Text('批量导入 KML'),
             ),
           ],
         ),

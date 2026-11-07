@@ -73,7 +73,7 @@ class _QuizSearchPageState extends State<QuizSearchPage> {
           controller: _controller,
           autofocus: true,
           decoration: const InputDecoration(
-            hintText: '搜索题干 / 解析关键词',
+            hintText: '搜索题干 / 选项 / 答案 / 解析',
             border: InputBorder.none,
           ),
           onChanged: _onChanged,
@@ -105,55 +105,73 @@ class _QuizSearchPageState extends State<QuizSearchPage> {
                   itemBuilder: (context, index) {
                     final q = _results[index];
                     final letters = q.optionLetters;
+                    final answerText =
+                        q.isJudge ? (q.answer == 'A' ? '正确' : '错误') : q.answer;
                     return Card(
                       margin: const EdgeInsets.symmetric(
                         horizontal: 12,
                         vertical: 4,
                       ),
-                      child: ExpansionTile(
-                        title: Text(q.stem),
-                        subtitle: Text(
-                          '${_bankNames[q.bankId] ?? ''} · ${q.type}'
-                          '${q.chapter.isEmpty ? '' : ' · ${q.chapter}'}',
-                        ),
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                for (var i = 0; i < q.options.length; i++)
-                                  Padding(
-                                    padding:
-                                        const EdgeInsets.symmetric(vertical: 2),
-                                    child: Text(
-                                      '${letters[i]}. ${q.options[i]}',
-                                      style: TextStyle(
-                                        color: q.answerLetters
-                                                .contains(letters[i])
-                                            ? const Color(0xFF2E7D32)
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              q.stem,
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${_bankNames[q.bankId] ?? ''} · ${q.type}'
+                              '${q.chapter.isEmpty ? '' : ' · ${q.chapter}'}',
+                              style: theme.textTheme.bodySmall,
+                            ),
+                            const SizedBox(height: 8),
+                            for (var i = 0; i < q.options.length; i++)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 2),
+                                child: Text(
+                                  '${letters[i]}. ${q.options[i]}',
+                                  style: TextStyle(
+                                    color: q.answerLetters
+                                            .contains(letters[i])
+                                        ? const Color(0xFF2E7D32)
+                                        : null,
+                                    fontWeight:
+                                        q.answerLetters.contains(letters[i])
+                                            ? FontWeight.w600
                                             : null,
-                                        fontWeight:
-                                            q.answerLetters.contains(letters[i])
-                                                ? FontWeight.w600
-                                                : null,
-                                      ),
-                                    ),
-                                  ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  '答案：${q.isJudge ? (q.answer == 'A' ? '正确' : '错误') : q.answer}',
-                                  style: const TextStyle(
-                                    color: Color(0xFF2E7D32),
-                                    fontWeight: FontWeight.w600,
                                   ),
                                 ),
-                                if (q.analysis.isNotEmpty)
-                                  Text('解析：${q.analysis}'),
-                              ],
+                              ),
+                            const SizedBox(height: 8),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF2E7D32)
+                                    .withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                '答案：$answerText',
+                                style: const TextStyle(
+                                  color: Color(0xFF2E7D32),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                             ),
-                          ),
-                        ],
+                            if (q.analysis.isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Text('解析：${q.analysis}'),
+                            ],
+                          ],
+                        ),
                       ),
                     );
                   },
